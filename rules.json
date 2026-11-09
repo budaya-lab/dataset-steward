@@ -1,0 +1,27 @@
+{
+  "stages": ["master", "curated", "annotated", "ground-truth"],
+  "required_keyword_prefixes": ["task", "project", "stage"],
+  "template_items": [
+    ".DS_Store",
+    ".git",
+    ".gitattributes",
+    ".github",
+    ".gitignore",
+    ".ipynb_checkpoints",
+    ".release-please-manifest.json",
+    "__pycache__",
+    "AGENTS.md",
+    "CHANGELOG.md",
+    "README.md",
+    "buckets.csv",
+    "datapackage.json",
+    "release-please-config.json",
+    "scripts",
+    "stage.config.json"
+  ],
+  "ignore_patterns": ["*.backup-*", "dropped-*"],
+  "suffix_stages": {
+    "-atd": "annotated",
+    "-gt": "ground-truth"
+  }
+}
