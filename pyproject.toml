@@ -1,0 +1,10 @@
+[project]
+name = "dataset-steward"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "markdown==3.11.3",
+    "pandas==3.1.1",
+]
