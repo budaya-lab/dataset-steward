@@ -368,11 +368,11 @@ function bind(item, key, placeholder) {
   return textInput(typeof item[key] === "string" ? item[key] : "", (value) => { item[key] = value; }, { placeholder: placeholder || "", "aria-label": key });
 }
 
-function sizeText(resource) {
-  if (!Number.isInteger(resource.size)) return "";
+function countText(resource) {
+  if (!Number.isSafeInteger(resource.count) || resource.count < 0) return "";
   const path = String(resource.path || "").toLowerCase();
   const unit = path.endsWith(".csv") ? "row" : path.endsWith(".json") ? "item" : "file";
-  return resource.size === 1 ? `1 ${unit}` : `${resource.size} ${unit}s`;
+  return resource.count === 1 ? `1 ${unit}` : `${resource.count} ${unit}s`;
 }
 
 function renderEdit() {
@@ -424,16 +424,16 @@ function renderEdit() {
     rowSection({
       key: "resources",
       title: "Resources",
-      hint: "Every root file and folder, except template files. buckets.csv doesn't need a row. Size is counted automatically.",
+      hint: "Every root file and folder, except template files. buckets.csv doesn't need a row. Items are counted automatically. Leave Format empty for folders.",
       rowClass: "row-4",
-      headers: ["Name", "Path", "Title", "Format", "Size"],
+      headers: ["Name", "Path", "Title", "Format", "Count"],
       blank: () => ({ name: "", path: "", title: "", format: "" }),
       cells: (item) => [
         bind(item, "name"),
         bind(item, "path"),
         bind(item, "title"),
         bind(item, "format"),
-        el("span", { class: "muted" }, sizeText(item)),
+        el("span", { class: "muted" }, countText(item)),
       ],
       extraActions: (items, draw) => {
         const known = new Set(items.map((item) => item.path));

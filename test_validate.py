@@ -16,10 +16,10 @@ GOOD = {
     "sources": [{"title": "Elsewhere", "path": "https://example.org/not-checked"}],
     "resources": [
         {"name": "input", "path": "input.csv", "format": "csv", "title": "Manifest"},
-        {"name": "xml", "path": "xml/", "format": "dir", "title": "Annotations"},
+        {"name": "xml", "path": "xml/", "title": "Annotations"},
     ],
 }
-BUCKETS = ",class,regions\n0,text,\"12,342\"\n1,image,736\n"
+BUCKETS = "class,regions\ntext,\"12,342\"\nimage,736\n"
 
 
 class Base(unittest.TestCase):
@@ -118,6 +118,19 @@ class Resources(Base):
             resources = GOOD["resources"] + [{"name": "bad", "path": path, "title": "Bad"}]
             self.assertFalse(self.changed(resources=resources).ok, path)
 
+    def test_count_is_an_optional_nonnegative_safe_integer(self):
+        for count in (0, 2, 9007199254740991):
+            resources = [{**GOOD["resources"][0], "count": count}, GOOD["resources"][1]]
+            self.assertTrue(self.changed(resources=resources).ok, count)
+        for count in (-1, 1.5, True, "2", None, 9007199254740992):
+            resources = [{**GOOD["resources"][0], "count": count}, GOOD["resources"][1]]
+            self.assertFalse(self.changed(resources=resources).ok, count)
+
+    def test_directory_resources_omit_format(self):
+        for format in ("dir", "directory", "xml", ""):
+            resources = [GOOD["resources"][0], {**GOOD["resources"][1], "format": format}]
+            self.assertFalse(self.changed(resources=resources).ok, format)
+
     def test_stubs(self):
         (self.dir / "My Folder").mkdir()
         (self.dir / "notes.TXT").write_text("x")
@@ -126,7 +139,7 @@ class Resources(Base):
         self.assertEqual(
             stubs,
             [
-                {"name": "my-folder", "path": "My Folder/", "format": "dir", "title": ""},
+                {"name": "my-folder", "path": "My Folder/", "title": ""},
                 {"name": "notes", "path": "notes.TXT", "format": "txt", "title": ""},
             ],
         )
@@ -142,21 +155,32 @@ class Buckets(Base):
         (self.dir / "buckets.csv").unlink()
         self.assertFalse(validate.validate_folder(self.dir).ok)
 
-    def test_no_index_fails(self):
-        self.assertTrue(self.read("year,count\n1956,201\n")["errors"])
+    def test_label_and_count_without_index_pass(self):
+        buckets = self.read("year,count\n1956,201\n")
+        self.assertEqual(buckets["errors"], [])
+        self.assertEqual(buckets["headers"], ["year", "count"])
+        self.assertEqual(buckets["rows"], [["1956", "201"]])
 
-    def test_any_columns_with_index_pass(self):
-        for text in (",year,count\n0,1956,201\n", ",class,regions\n0,text,\"12,342\"\n", ",metric,percent\n0,a,7.6\n"):
+    def test_other_value_columns_without_index_pass(self):
+        for text in ("year,count\n1956,201\n", "class,regions\ntext,\"12,342\"\n", "metric,percent\na,7.6\n"):
             self.assertEqual(self.read(text)["errors"], [], text)
 
-    def test_duplicate_index_fails(self):
-        self.assertTrue(self.read(",year,count\n0,1956,1\n0,1957,2\n")["errors"])
+    def test_pandas_index_is_rejected_with_export_guidance(self):
+        buckets = self.read(",year,count\n0,1956,201\n")
+        self.assertTrue(any("index=False" in error for error in buckets["errors"]))
+        self.assertEqual(validate.bucket_charts(buckets), [])
+
+    def test_named_numeric_label_column_is_not_removed(self):
+        buckets = self.read("index,count\n001,1\n002,2\n")
+        self.assertEqual(buckets["errors"], [])
+        self.assertEqual(buckets["headers"], ["index", "count"])
+        self.assertEqual(validate.bucket_charts(buckets)[0]["points"][0]["label"], "001")
 
     def test_empty_fails(self):
-        self.assertTrue(self.read(",year,count\n")["errors"])
+        self.assertTrue(self.read("year,count\n")["errors"])
 
     def test_chart_uses_first_column_as_label_even_if_numeric(self):
-        charts = validate.bucket_charts(self.read(",year,count\n0,1956,201\n"))
+        charts = validate.bucket_charts(self.read("year,count\n1956,201\n"))
         self.assertEqual(len(charts), 1)
         self.assertEqual(charts[0]["column"], "count")
         self.assertEqual(charts[0]["points"][0], {"label": "1956", "value": 201.0, "display": "201"})
@@ -165,10 +189,10 @@ class Buckets(Base):
         self.assertEqual(validate.bucket_charts(self.read(BUCKETS))[0]["points"][0]["value"], 12342.0)
 
     def test_several_value_columns_give_several_charts(self):
-        self.assertEqual(len(validate.bucket_charts(self.read(",k,a,b\n0,x,1,2\n"))), 2)
+        self.assertEqual(len(validate.bucket_charts(self.read("k,a,b\nx,1,2\n"))), 2)
 
     def test_text_only_warns(self):
-        buckets = self.read(",k,v\n0,x,y\n")
+        buckets = self.read("k,v\nx,y\n")
         self.assertEqual(buckets["errors"], [])
         self.assertTrue(buckets["warnings"])
 
@@ -201,10 +225,11 @@ class Warnings(Base):
         self.assertTrue(self.changed(name="other").ok)
 
 
-class Sizes(Base):
-    def saved_sizes(self):
+class Counts(Base):
+    def saved_counts(self):
         package = json.loads((self.dir / "datapackage.json").read_text())
-        return {r["name"]: r.get("size") for r in package["resources"]}
+        self.assertTrue(all("size" not in r for r in package["resources"]))
+        return {r["name"]: r.get("count") for r in package["resources"]}
 
     def add(self, name, path, content=None):
         if content is not None:
@@ -213,20 +238,30 @@ class Sizes(Base):
 
     def test_csv_rows_and_files_in_folder(self):
         report = validate.process_folder(self.dir)
-        self.assertTrue(report.sizes_written)
-        self.assertEqual(self.saved_sizes(), {"input": 2, "xml": 2})
+        self.assertTrue(report.counts_written)
+        self.assertTrue(report.to_dict()["counts_written"])
+        self.assertNotIn("sizes_written", report.to_dict())
+        self.assertIn("updated counts", validate.format_report(report))
+        self.assertEqual(self.saved_counts(), {"input": 2, "xml": 2})
 
     def test_quoted_newline_is_one_row(self):
         (self.dir / "input.csv").write_text('id,text\n1,"two\nlines"\n')
         validate.process_folder(self.dir)
-        self.assertEqual(self.saved_sizes()["input"], 1)
+        self.assertEqual(self.saved_counts()["input"], 1)
 
     def test_json_counts_top_level_items(self):
         resources = GOOD["resources"] + [self.add("a", "a.json", "[1, 2, 3]"), self.add("b", "b.json", '{"x": {"y": 1}}')]
         self.write({**GOOD, "resources": resources})
         validate.process_folder(self.dir)
-        self.assertEqual(self.saved_sizes()["a"], 3)
-        self.assertEqual(self.saved_sizes()["b"], 1)
+        self.assertEqual(self.saved_counts()["a"], 3)
+        self.assertEqual(self.saved_counts()["b"], 1)
+
+    def test_empty_resources_have_zero_counts(self):
+        (self.dir / "input.csv").write_text("id,url\n")
+        for file in (self.dir / "xml").iterdir():
+            file.unlink()
+        validate.process_folder(self.dir)
+        self.assertEqual(self.saved_counts(), {"input": 0, "xml": 0})
 
     def test_folder_counts_nested_but_not_hidden_files(self):
         (self.dir / "xml" / "deep").mkdir()
@@ -235,44 +270,75 @@ class Sizes(Base):
         (self.dir / "xml" / ".hidden").mkdir()
         (self.dir / "xml" / ".hidden" / "d.xml").write_text("<a/>")
         validate.process_folder(self.dir)
-        self.assertEqual(self.saved_sizes()["xml"], 3)
+        self.assertEqual(self.saved_counts()["xml"], 3)
 
-    def test_other_types_have_no_size(self):
+    def test_other_types_have_no_count(self):
         names = ("a.py", "a.ipynb", "a.md", "a.yaml", "a.toml")
-        added = [{**self.add(n, n, "{}"), "size": 99} for n in names]
+        added = [{**self.add(n, n, "{}"), "size": 88, "count": 99} for n in names]
         self.write({**GOOD, "resources": GOOD["resources"] + added})
         validate.process_folder(self.dir)
-        self.assertTrue(all(self.saved_sizes()[n] is None for n in names))
+        self.assertTrue(all(self.saved_counts()[n] is None for n in names))
 
-    def test_stale_size_is_recounted(self):
-        resources = [{**GOOD["resources"][0], "size": 999}, GOOD["resources"][1]]
+    def test_multipath_count_is_omitted(self):
+        resources = GOOD["resources"] + [{"name": "parts", "title": "Parts", "path": ["input.csv"], "count": 99}]
         self.write({**GOOD, "resources": resources})
         validate.process_folder(self.dir)
-        self.assertEqual(self.saved_sizes()["input"], 2)
+        self.assertIsNone(self.saved_counts()["parts"])
 
-    def test_unchanged_sizes_are_not_rewritten(self):
+    def test_stale_count_is_recounted(self):
+        resources = [{**GOOD["resources"][0], "count": 999}, GOOD["resources"][1]]
+        self.write({**GOOD, "resources": resources})
         validate.process_folder(self.dir)
-        self.assertFalse(validate.process_folder(self.dir).sizes_written)
+        self.assertEqual(self.saved_counts()["input"], 2)
+
+    def test_legacy_sizes_and_directory_formats_are_migrated(self):
+        resources = [
+            {**GOOD["resources"][0], "size": 999, "bytes": 24, "custom": "keep"},
+            {**GOOD["resources"][1], "size": 999, "format": "dir"},
+        ]
+        package = {**GOOD, "resources": resources}
+        self.write(package)
+        self.assertTrue(validate.process_folder(self.dir).ok)
+        self.assertEqual(self.saved_counts(), {"input": 2, "xml": 2})
+        saved = json.loads((self.dir / "datapackage.json").read_text())["resources"]
+        self.assertEqual(saved[0]["bytes"], 24)
+        self.assertEqual(saved[0]["custom"], "keep")
+        self.assertEqual(saved[0]["format"], "csv")
+        self.assertNotIn("format", saved[1])
+        self.assertEqual(package["resources"][0]["size"], 999)
+
+    def test_unchanged_counts_are_not_rewritten(self):
+        validate.process_folder(self.dir)
+        self.assertFalse(validate.process_folder(self.dir).counts_written)
 
     def test_check_mode_writes_nothing(self):
+        resources = [{**r, "size": 999} for r in GOOD["resources"]]
+        resources[1]["format"] = "dir"
+        self.write({**GOOD, "resources": resources})
         before = (self.dir / "datapackage.json").read_text()
         validate.process_folder(self.dir, write=False)
         self.assertEqual((self.dir / "datapackage.json").read_text(), before)
+        self.assertFalse((self.dir / "README.md").exists())
 
-    def test_sizes_are_saved_even_when_dataset_fails(self):
+    def test_counts_are_saved_even_when_dataset_fails(self):
         self.write({**GOOD, "title": ""})
         self.assertFalse(validate.process_folder(self.dir).ok)
-        self.assertEqual(self.saved_sizes()["input"], 2)
+        self.assertEqual(self.saved_counts()["input"], 2)
 
     def test_unreadable_json_is_an_error(self):
         resources = GOOD["resources"] + [self.add("bad", "bad.json", "{oops")]
-        self.assertFalse(self.changed(resources=resources).ok)
+        self.write({**GOOD, "resources": resources})
+        report = validate.process_folder(self.dir)
+        self.assertFalse(report.ok)
+        self.assertTrue(any("could not be counted" in error for error in report.errors))
+        self.assertFalse((self.dir / "README.md").exists())
 
-    def test_readme_shows_sizes(self):
+    def test_readme_shows_counts(self):
         validate.process_folder(self.dir)
         text = (self.dir / "README.md").read_text()
+        self.assertIn("| Format | Count |", text)
         self.assertIn("| Manifest | input.csv | csv | 2 rows |", text)
-        self.assertIn("| Annotations | xml/ | dir | 2 files |", text)
+        self.assertIn("| Annotations | xml/ |  | 2 files |", text)
 
 
 class Readme(Base):
@@ -294,7 +360,8 @@ class Readme(Base):
         text = self.readme()
         for expected in ("# Sample", "badge/stage-curated-purple", "| A Person | creator |", "Elsewhere", "12,342", validate.NOTES_MARKER):
             self.assertIn(expected, text)
-        self.assertNotIn("| 0 |", text)  # the bucket index isn't displayed
+        self.assertIn("| Class | Regions |", text)
+        self.assertIn("| text | 12,342 |", text)
 
     def test_no_sources_section_without_sources(self):
         self.write({k: v for k, v in GOOD.items() if k != "sources"})

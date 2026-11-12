@@ -4,7 +4,7 @@
     python server.py                    datasets next to _describe/, port 8765
     python server.py --input /data --port 9000
 
-Validates every ds-* folder on startup and recounts each resource's size, which
+Validates every ds-* folder on startup and recounts each resource's items, which
 updates datapackage.json. Listens on localhost only. Saving edits datapackage.json
 and, if the dataset passes, its README. It never touches git.
 Needs the `markdown` package.
@@ -114,8 +114,8 @@ class App:
         readme = validate.readme_path(folder)
         existing = readme.read_text(encoding="utf-8") if readme.is_file() else ""
         notes = validate.extract_notes(existing)
-        sized = validate.with_sizes(package, folder) if package else package
-        body = validate.render_body(sized, buckets, name, buckets_block=CHART_TOKEN)
+        counted = validate.with_counts(package, folder) if package else package
+        body = validate.render_body(counted, buckets, name, buckets_block=CHART_TOKEN)
         html = render_markdown(body).replace(f"<p>{CHART_TOKEN}</p>", '<div id="buckets-chart"></div>', 1)
         if notes:
             html += '<hr class="notes-rule">' + render_markdown(notes)
@@ -125,7 +125,7 @@ class App:
             "report": report.to_dict(),
             "etag": etag_of(path),
             "raw": path.read_text(encoding="utf-8") if path.is_file() else "",
-            "package": sized,
+            "package": counted,
             "package_problem": problem,
             "stages": self.rules["stages"],
             "stubs": validate.stub_resources(folder, report.undescribed, package),
@@ -168,6 +168,7 @@ class App:
 
         detail = self.detail(name)
         detail["report"]["readme_written"] = report.readme_written
+        detail["report"]["counts_written"] = report.counts_written
         return detail
 
 
