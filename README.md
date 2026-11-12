@@ -104,3 +104,35 @@ The JSON report now uses `counts_written` instead of `sizes_written`.
 uv run --locked python -B -m unittest discover -p 'test_*.py'
 node --test static/*.test.mjs
 ```
+
+## Releases
+
+**Validate steward** runs these tests on PRs targeting `main`, pushes to `main`,
+and manual runs. CI uses Python 3.13, Node.js 22 and locked dependencies. Tests use
+synthetic temporary datasets; CI does not rewrite real datasets. Keep the workflow
+name **Validate steward** and check name **tests** stable.
+
+Use Conventional Commit squash PR titles: `feat: ...` (minor), `fix: ...` (patch),
+or `feat!: ...` / a `BREAKING CHANGE:` footer (major). Docs/chore-only changes
+normally do not warrant a release.
+
+After successful validation of the current `main` push, Release Please opens or
+updates a release PR. It manages `CHANGELOG.md`, the release manifest, and the
+versions in `pyproject.toml` and Steward's own `uv.lock` entry, not dependency
+versions. The first release is `0.1.0`. Do not edit generated release files or
+these versions manually. The configuration uses the
+[TOML extra-file updater](https://github.com/googleapis/release-please/blob/v17.3.0/docs/customizing.md#updating-arbitrary-toml-files).
+
+Before merging each release PR, review its diff and **manually run Validate
+steward on that branch**. GitHub does not automatically run PR CI for PRs created
+with `GITHUB_TOKEN`. Rerun validation after branch updates and confirm it satisfies
+required checks. With owner approval, merge the release PR to create the version
+tag and GitHub Release. Ordinary feature merges do not immediately publish a
+release. There is no PyPI upload or dataset release step.
+
+Before enabling this workflow, require reviewed PRs and the **tests** check on
+`main`, and restrict direct pushes. If repository policy requires it, allow Actions
+to create PRs in **Settings → Actions → General**. Release management uses the
+built-in `GITHUB_TOKEN` with Contents, Issues and Pull requests write permissions;
+no extra secret is needed. Failed, stale, PR and tag validation runs do not trigger
+release management.
