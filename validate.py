@@ -8,7 +8,7 @@
     python validate.py --json           machine-readable report
 
 Exits with 1 if any dataset has errors. Warnings never fail a dataset.
-Each run recounts every resource's `size` and saves it in datapackage.json:
+Each run recounts every resource's `count` and saves it in datapackage.json:
 rows for .csv, top-level items for .json, files for a folder, nothing otherwise.
 A README is written only for a dataset with no errors. Rules live in rules.json.
 Standard library only.
@@ -46,6 +46,7 @@ BADGE_COLORS = {"task": "green", "project": "blue", "stage": "purple"}
 CREATED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 CREATED_FMT = "%Y-%m-%dT%H:%M:%SZ"
 RESOURCE_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$")
+MAX_COUNT = 9007199254740991
 NUMBER_RE = re.compile(r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
 
 
@@ -56,7 +57,7 @@ class Report:
     warnings: list[str] = field(default_factory=list)
     undescribed: list[str] = field(default_factory=list)
     readme_written: bool = False
-    sizes_written: bool = False
+    counts_written: bool = False
 
     @property
     def ok(self) -> bool:
@@ -70,7 +71,7 @@ class Report:
             "warnings": self.warnings,
             "undescribed": self.undescribed,
             "readme_written": self.readme_written,
-            "sizes_written": self.sizes_written,
+            "counts_written": self.counts_written,
         }
 
 
@@ -256,7 +257,7 @@ def count_files(folder: Path) -> int:
 
 
 def measure(path: Path) -> int | None:
-    """Return a resource's size, or None for a type that has no size.
+    """Return a resource's item count, or None for an unsupported type.
 
     Raises ValueError if a .csv or .json file can't be counted.
     """
@@ -277,21 +278,24 @@ def measure(path: Path) -> int | None:
     return None
 
 
-def with_sizes(package: dict, folder: Path) -> dict:
-    """Return a copy of the package with every resource's size recounted."""
+def with_counts(package: dict, folder: Path) -> dict:
+    """Recount a copy, replacing legacy sizes and omitting directory formats."""
     result = copy.deepcopy(package)
     for resource in _dicts(result.get("resources")):
+        resource.pop("size", None)
         normalized = _normalize_path(resource.get("path"))
-        size = None
+        count = None
         if normalized is not None and (folder / normalized).exists():
+            if (folder / normalized).is_dir():
+                resource.pop("format", None)
             try:
-                size = measure(folder / normalized)
+                count = measure(folder / normalized)
             except ValueError:
                 pass  # reported as an error by _check_resources
-        if size is None:
-            resource.pop("size", None)
+        if count is None:
+            resource.pop("count", None)
         else:
-            resource["size"] = size
+            resource["count"] = count
     return result
 
 
@@ -334,6 +338,8 @@ def _check_resources(pkg: dict, folder: Path, rules: dict, report: Report) -> No
                 )
         if not _text(resource.get("title")):
             report.errors.append(f"resource {label} needs a title")
+        if "count" in resource and (type(resource["count"]) is not int or not 0 <= resource["count"] <= MAX_COUNT):
+            report.errors.append(f"resource {label} count must be a non-negative safe integer")
         paths = resource.get("path")
         for path in paths if isinstance(paths, list) else [paths]:
             normalized = _normalize_path(path)
@@ -342,6 +348,8 @@ def _check_resources(pkg: dict, folder: Path, rules: dict, report: Report) -> No
             elif not (folder / normalized).exists():
                 report.errors.append(f"resource {label} points to a missing path: {path!r}")
             else:
+                if (folder / normalized).is_dir() and "format" in resource:
+                    report.errors.append(f"directory resource {label} must omit format")
                 described.add(normalized)
                 try:
                     measure(folder / normalized)
@@ -418,14 +426,14 @@ def stub_resources(folder: Path, names: list[str], package: dict | None) -> list
         while slug in taken:
             slug, counter = f"{base}-{counter}", counter + 1
         taken.add(slug)
-        stubs.append(
-            {
-                "name": slug,
-                "path": f"{name}/" if item.is_dir() else name,
-                "format": "dir" if item.is_dir() else item.suffix.lstrip(".").lower(),
-                "title": "",
-            }
-        )
+        resource = {
+            "name": slug,
+            "path": f"{name}/" if item.is_dir() else name,
+            "title": "",
+        }
+        if item.is_file():
+            resource["format"] = item.suffix.lstrip(".").lower()
+        stubs.append(resource)
     return stubs
 
 
@@ -458,13 +466,13 @@ def _badges(keywords: list[str]) -> str:
     )
 
 
-def _size_text(resource: dict) -> str:
-    size = resource.get("size")
-    if not isinstance(size, int):
+def _count_text(resource: dict) -> str:
+    count = resource.get("count")
+    if type(count) is not int or not 0 <= count <= MAX_COUNT:
         return ""
     path = str(resource.get("path", "")).lower()
     unit = "row" if path.endswith(".csv") else "item" if path.endswith(".json") else "file"
-    return f"{size} {unit}" if size == 1 else f"{size} {unit}s"
+    return f"{count} {unit}" if count == 1 else f"{count} {unit}s"
 
 
 def _buckets_table(buckets: dict) -> str:
@@ -513,9 +521,9 @@ def render_body(package: dict | None, buckets: dict, folder_name: str, buckets_b
     parts += [
         "## Resources",
         _table(
-            ["Resource name", "Title", "Path", "Format", "Size"],
+            ["Resource name", "Title", "Path", "Format", "Count"],
             [
-                (r.get("name", ""), r.get("title", ""), resource_path(r), r.get("format", ""), _size_text(r))
+                (r.get("name", ""), r.get("title", ""), resource_path(r), r.get("format", ""), _count_text(r))
                 for r in _dicts(pkg.get("resources"))
             ],
         ),
@@ -559,8 +567,8 @@ def expected_readme(folder: Path) -> str:
     package, _ = load_package(folder)
     path = readme_path(folder)
     existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-    sized = with_sizes(package, folder) if package else package
-    body = render_body(sized, read_buckets(folder / BUCKETS), folder.name)
+    counted = with_counts(package, folder) if package else package
+    body = render_body(counted, read_buckets(folder / BUCKETS), folder.name)
     return compose_readme(body, extract_notes(existing))
 
 
@@ -581,18 +589,18 @@ def write_atomic(path: Path, text: str) -> None:
 
 
 def process_folder(folder: Path, rules: dict | None = None, write: bool = True) -> Report:
-    """Recount sizes and validate. Unless write is False, save any changed sizes,
+    """Recount and validate. Unless write is False, save changed resource metadata,
     and the README if the dataset passes and the text changed."""
     folder = Path(folder)
     package, _ = load_package(folder)
-    sizes_written = False
+    counts_written = False
     if write and package is not None:
-        updated = with_sizes(package, folder)
+        updated = with_counts(package, folder)
         if updated != package:
             write_atomic(folder / DATAPACKAGE, json.dumps(updated, indent=2, ensure_ascii=False) + "\n")
-            sizes_written = True
+            counts_written = True
     report = validate_folder(folder, rules)
-    report.sizes_written = sizes_written
+    report.counts_written = counts_written
     if write and report.ok:
         path = readme_path(folder)
         text = expected_readme(folder)
@@ -611,8 +619,8 @@ def format_report(report: Report) -> str:
     lines = [f"{status}  {report.folder}  ({errors} errors, {warnings} warnings)"]
     lines += [f"    error: {message}" for message in report.errors]
     lines += [f"    warn:  {message}" for message in report.warnings]
-    if report.sizes_written:
-        lines.append("    updated sizes in datapackage.json")
+    if report.counts_written:
+        lines.append("    updated counts in datapackage.json")
     if report.readme_written:
         lines.append("    wrote README")
     return "\n".join(lines)
