@@ -103,11 +103,10 @@ def _parse_number(cell: str) -> float | None:
 
 
 def read_buckets(path: Path) -> dict:
-    """Read a buckets.csv of any shape.
+    """Read buckets.csv with a named label column, then value columns.
 
-    The expected form is what DataFrame.to_csv() writes: an index column, then
-    a label column, then one or more value columns. Column names are free,
-    because buckets differ per dataset.
+    There is no extra index column. Column names are free, because buckets
+    differ per dataset.
     """
     result = {"present": False, "errors": [], "warnings": [], "headers": [], "rows": [], "numeric": []}
     if not path.is_file():
@@ -131,16 +130,12 @@ def read_buckets(path: Path) -> dict:
             result["errors"].append(f"{BUCKETS} line {number} has {len(row)} cells, expected {width}")
     body = [(row + [""] * width)[:width] for row in body]
 
-    index_cells = [row[0].strip() for row in body]
-    named_index = header[0].strip() in ("", "index")
-    integers = all(re.fullmatch(r"-?\d+", cell) for cell in index_cells)
-    if named_index and integers and len(set(index_cells)) == len(index_cells):
-        header, body = header[1:], [row[1:] for row in body]
-    else:
+    if not header[0].strip():
         result["errors"].append(
-            f"{BUCKETS} needs an index as its first column (an unnamed column of unique "
-            "integers, which is what DataFrame.to_csv() writes)"
+            f"{BUCKETS} must start with a named label column; "
+            "export without an index using index=False"
         )
+        return result
 
     result["headers"] = [cell.strip() for cell in header]
     result["rows"] = body

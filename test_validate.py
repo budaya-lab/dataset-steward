@@ -19,7 +19,7 @@ GOOD = {
         {"name": "xml", "path": "xml/", "title": "Annotations"},
     ],
 }
-BUCKETS = ",class,regions\n0,text,\"12,342\"\n1,image,736\n"
+BUCKETS = "class,regions\ntext,\"12,342\"\nimage,736\n"
 
 
 class Base(unittest.TestCase):
@@ -155,21 +155,32 @@ class Buckets(Base):
         (self.dir / "buckets.csv").unlink()
         self.assertFalse(validate.validate_folder(self.dir).ok)
 
-    def test_no_index_fails(self):
-        self.assertTrue(self.read("year,count\n1956,201\n")["errors"])
+    def test_label_and_count_without_index_pass(self):
+        buckets = self.read("year,count\n1956,201\n")
+        self.assertEqual(buckets["errors"], [])
+        self.assertEqual(buckets["headers"], ["year", "count"])
+        self.assertEqual(buckets["rows"], [["1956", "201"]])
 
-    def test_any_columns_with_index_pass(self):
-        for text in (",year,count\n0,1956,201\n", ",class,regions\n0,text,\"12,342\"\n", ",metric,percent\n0,a,7.6\n"):
+    def test_other_value_columns_without_index_pass(self):
+        for text in ("year,count\n1956,201\n", "class,regions\ntext,\"12,342\"\n", "metric,percent\na,7.6\n"):
             self.assertEqual(self.read(text)["errors"], [], text)
 
-    def test_duplicate_index_fails(self):
-        self.assertTrue(self.read(",year,count\n0,1956,1\n0,1957,2\n")["errors"])
+    def test_pandas_index_is_rejected_with_export_guidance(self):
+        buckets = self.read(",year,count\n0,1956,201\n")
+        self.assertTrue(any("index=False" in error for error in buckets["errors"]))
+        self.assertEqual(validate.bucket_charts(buckets), [])
+
+    def test_named_numeric_label_column_is_not_removed(self):
+        buckets = self.read("index,count\n001,1\n002,2\n")
+        self.assertEqual(buckets["errors"], [])
+        self.assertEqual(buckets["headers"], ["index", "count"])
+        self.assertEqual(validate.bucket_charts(buckets)[0]["points"][0]["label"], "001")
 
     def test_empty_fails(self):
-        self.assertTrue(self.read(",year,count\n")["errors"])
+        self.assertTrue(self.read("year,count\n")["errors"])
 
     def test_chart_uses_first_column_as_label_even_if_numeric(self):
-        charts = validate.bucket_charts(self.read(",year,count\n0,1956,201\n"))
+        charts = validate.bucket_charts(self.read("year,count\n1956,201\n"))
         self.assertEqual(len(charts), 1)
         self.assertEqual(charts[0]["column"], "count")
         self.assertEqual(charts[0]["points"][0], {"label": "1956", "value": 201.0, "display": "201"})
@@ -178,10 +189,10 @@ class Buckets(Base):
         self.assertEqual(validate.bucket_charts(self.read(BUCKETS))[0]["points"][0]["value"], 12342.0)
 
     def test_several_value_columns_give_several_charts(self):
-        self.assertEqual(len(validate.bucket_charts(self.read(",k,a,b\n0,x,1,2\n"))), 2)
+        self.assertEqual(len(validate.bucket_charts(self.read("k,a,b\nx,1,2\n"))), 2)
 
     def test_text_only_warns(self):
-        buckets = self.read(",k,v\n0,x,y\n")
+        buckets = self.read("k,v\nx,y\n")
         self.assertEqual(buckets["errors"], [])
         self.assertTrue(buckets["warnings"])
 
@@ -349,7 +360,8 @@ class Readme(Base):
         text = self.readme()
         for expected in ("# Sample", "badge/stage-curated-purple", "| A Person | creator |", "Elsewhere", "12,342", validate.NOTES_MARKER):
             self.assertIn(expected, text)
-        self.assertNotIn("| 0 |", text)  # the bucket index isn't displayed
+        self.assertIn("| Class | Regions |", text)
+        self.assertIn("| text | 12,342 |", text)
 
     def test_no_sources_section_without_sources(self):
         self.write({k: v for k, v in GOOD.items() if k != "sources"})

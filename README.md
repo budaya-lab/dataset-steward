@@ -53,9 +53,24 @@ resource `count` and `contributors`.
 
 ## Buckets
 
-`buckets.csv` holds the metadata that matters most for the dataset's task, such as spread (pages per year), error types (count per type) or agreement scores (percent per metric). Choose whatever fits the task.
+`buckets.csv` holds the metadata that matters most for the dataset's task, such
+as spread (pages per year), error types (count per type) or agreement scores
+(percent per metric). Choose whatever fits the task.
 
-The format is an index column, then a label column, then one or more numeric columns. `DataFrame.to_csv()` writes the index for you. See `buckets.ipynb` for an example.
+Start with a named label column, followed by the numeric value columns. Do not add
+an index column. Use `DataFrame.to_csv(..., index=False)` when exporting with pandas.
+See `buckets.ipynb` for an example.
+
+For example:
+
+```csv
+year,count
+1956,201
+1957,78
+```
+
+Re-export existing indexed summaries with `index=False`; the validator does not
+silently remove columns.
 
 ## Resource counts
 
